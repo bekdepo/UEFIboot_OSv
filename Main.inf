@@ -21,12 +21,11 @@
   ENTRY_POINT                    = UefiMain
 
 #
-#  VALID_ARCHITECTURES           = IA32 X64
+#  VALID_ARCHITECTURES           = X64
 #
 
 [Sources]
   Main.c
-#  elfparse.c
 
 [Packages]
   StdLib/StdLib.dec
@@ -36,3 +35,7 @@
 [LibraryClasses]
   LibC
   LibStdio
+
+[Protocols]
+  gEfiLoadedImageProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid

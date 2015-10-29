@@ -15,6 +15,7 @@
 #include  <Library/UefiLib.h>
 #include <Protocol/SimpleFileSystem.h>
 #include <Guid/FileInfo.h>
+#include <Protocol/LoadedImage.h>
 
 #include  <stdio.h>
 #include  <stdint.h>
@@ -70,6 +71,7 @@ struct multiboot_info_type {
   uint16_t vbe_interface_len;
 } __attribute__((packed));
 
+typedef int EFIAPI entry_func_t(VOID *, VOID *, VOID *);
 
 void Memmap_to_e820(struct e820ent *e, EFI_MEMORY_DESCRIPTOR *md)
 {
@@ -105,7 +107,101 @@ memory_verify(uint8_t *src, uint8_t *dest, int size){
   return 0;
 }
 
-EFI_STATUS EFIAPI loader2(  IN VOID *Kernel,  IN VOID *E820,  IN VOID *MB_INFO,  IN VOID *CMDLINE  );
+EFI_STATUS EFIAPI loader2(  IN VOID *Kernel,  IN VOID *E820,  IN VOID *CMDLINE  );
+
+
+VOID *
+EFIAPI
+LoadFileToMemoryPool(
+  IN CHAR16 *Path,
+  IN OUT EFI_PHYSICAL_ADDRESS *Buffer,
+  IN OUT UINT64 *BufferSize
+  )
+{
+  EFI_STATUS Status;
+    // load kernel and cmdline
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL  *SimpleFile;
+  EFI_FILE_PROTOCOL                *Root;
+  EFI_FILE_PROTOCOL                *File;
+
+  Status = gBS->LocateProtocol (
+        &gEfiSimpleFileSystemProtocolGuid,
+        NULL,
+        (VOID **)&SimpleFile
+        );
+  if (EFI_ERROR (Status)) {
+    Print(L"%r on Locate EFI Simple File System Protocol.\n", Status);
+    return NULL;
+  }
+
+  Status = SimpleFile->OpenVolume(SimpleFile, &Root);
+  if (EFI_ERROR (Status)) {
+    Print(L"%r on Open volume.\n", Status);
+    return NULL;
+  }
+
+  Status = Root->Open(Root, &File, Path, EFI_FILE_MODE_READ, EFI_FILE_READ_ONLY);
+  if (EFI_ERROR (Status)) {
+    Print(L"%r on Open file.\n", Status);
+    Print(L"Path: %s\n", Path);
+    return NULL;
+  }
+
+  // get file info
+  EFI_FILE_INFO *FileInfo;
+  UINTN FileInfoSize = sizeof(EFI_FILE_INFO) * 2;
+  Status = gBS->AllocatePool(
+           EfiLoaderCode,
+           FileInfoSize,
+           (VOID **)&FileInfo
+           );
+  if (EFI_ERROR (Status)) {
+    Print(L"%Could not allocate memory pool %r\n", Status);
+    return NULL;
+  }
+  Status = File->GetInfo(File, &gEfiFileInfoGuid, &FileInfoSize, FileInfo);
+  if (EFI_ERROR (Status)) {
+    Print(L"%Could not get FileInfo: %r\n", Status);
+    return NULL;
+  }
+
+  // get file size
+  *BufferSize = FileInfo->FileSize;
+  //Print(L"FileSize = %d\n", BufferSize);
+  
+  // allocate FileBuffer
+  Status = gBS->AllocatePages(
+           AllocateAnyPages,
+           EfiLoaderData,
+           (*BufferSize + 8 + 4096) / 4096, // add 64bit space
+           Buffer
+           );
+  if (EFI_ERROR (Status)) {
+    Print(L"%Could not allocate memory pool %r\n", Status);
+    return NULL;
+  }
+  Print(L"allocate address = %x\n", *Buffer);
+
+  // set size to first 64bit space
+  UINT64 *Buffer_p = (UINT64 *)*Buffer;
+  *Buffer_p = *BufferSize;
+
+  Status = File->Read(
+          File,
+          BufferSize,
+          (VOID *)(Buffer_p + 1) // shift 64bit
+          );
+  if (EFI_ERROR (Status)) {
+    Print(L"%Could not Read file: %r\n", Status);
+    return NULL;
+  }
+
+  File->Close(File);
+  Root->Close(Root);
+  gBS->FreePool(FileInfo);
+
+  return Buffer;
+}
 
 
 EFI_STATUS
@@ -119,6 +215,17 @@ UefiMain (
 
   gST = SystemTable;
   gBS = gST->BootServices;
+
+  EFI_LOADED_IMAGE_PROTOCOL *loaded_image = NULL;
+  Status = gBS->HandleProtocol( ImageHandle,
+                                &gEfiLoadedImageProtocolGuid,
+                                (void **)&loaded_image);
+    if (EFI_ERROR(Status)) {
+        Print(L"handleprotocol: %r\n", Status);
+    }
+ 
+    Print(L"Image base: 0x%lx\n", loaded_image->ImageBase);
+ 
 
   UINTN MemmapSize = PAGE_SIZE;
   VOID *Memmap;
@@ -157,18 +264,23 @@ UefiMain (
   /* Print(L"DescriptorSize = %d\n", DescriptorSize); */
   /* Print(L"DescriptorVersion = %d\n", DescriptorVersion); */
 
-  struct e820ent *e820data;
+  
+  UINT64 *e820data_entry;
   UINT32 e820_size = sizeof(struct e820ent) * (MemmapSize / DescriptorSize);
   Status = gBS->AllocatePool(
 			     EfiLoaderData,
-			     e820_size,
-			     (VOID **)&e820data
+			     e820_size + 8, // add 64bit
+			     (VOID **)&e820data_entry
 			     );
   if (EFI_ERROR (Status)) {
     Print(L"%Could not allocate memory pool %r\n", Status);
     return Status;
   }
-  
+
+  // set e820 size to first 64bit
+  *e820data_entry = e820_size;
+  // shift 64bit
+  struct e820ent *e820data = (struct e820ent *)(e820data_entry + 1);
 
   for (int i = 0; i < (MemmapSize / DescriptorSize); i++)
   {
@@ -181,120 +293,50 @@ UefiMain (
     /* 	  md->Attribute */
     /* 	  ); */
     Memmap_to_e820(&(e820data[i]), md);
-    Print(L"E820: %d, 0x%016x-0x%016x\n",
-    	  e820data[i].type,
-    	  e820data[i].addr,
-    	  e820data[i].addr + e820data[i].size
-    	  );   
+    // Print(L"E820: %d, 0x%016x-0x%016x\n",
+    // 	  e820data[i].type,
+    // 	  e820data[i].addr,
+    // 	  e820data[i].addr + e820data[i].size
+    // 	  );   
   }  
 
-  // set mb_info //
-  // zero clear
-  struct multiboot_info_type mb_info;
-  UINT8 *mb = (UINT8 *)&mb_info;
-  for (int i = 0; i < sizeof(mb_info); i++) {
-    mb[i] = 0;
-  }
-  mb_info.cmdline = ADDR_CMDLINE;
-  mb_info.mmap_addr = ADDR_E820DATA;
-  mb_info.mmap_length = e820_size;
-  // set mb_info to ADDR_MB_INFO
-  UINTN mb_info_mem_size = 0;
-  EFI_PHYSICAL_ADDRESS mb_info_mem;
-  mb_info_mem_size = sizeof(mb_info) / 4096 + 1;
-  mb_info_mem = (EFI_PHYSICAL_ADDRESS)ADDR_MB_INFO;
-  Status = gBS->AllocatePages(
-			     AllocateAddress,
-			     EfiLoaderData,
-			     mb_info_mem_size, // 1page = 4KiB 
-			     &mb_info_mem
-			     );
-  if (EFI_ERROR (Status)) {
-    Print(L"%Could not allocate memory pool at ADDR_MB_INFO %r\n", Status);
-    return Status;
-  }  
+  // load cmdline
+  EFI_PHYSICAL_ADDRESS Cmdline;
+  UINT64 Cmdline_size = 0;
+  LoadFileToMemoryPool(L"cmdline", &Cmdline, &Cmdline_size);
 
   // load kernel
-  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL  *SimpleFile;
-  EFI_FILE_PROTOCOL                *Root;
-  EFI_FILE_PROTOCOL                *File;
-  CHAR16 *Path = L"loader-stripped.elf";
+  EFI_PHYSICAL_ADDRESS Kernel;
+  UINT64 Kernel_size = 0;
+  LoadFileToMemoryPool(L"loader-stripped.elf", &Kernel, &Kernel_size);
 
-  Status = gBS->LocateProtocol (
-				&gEfiSimpleFileSystemProtocolGuid,
-				NULL,
-				(VOID **)&SimpleFile
-				);
-  if (EFI_ERROR (Status)) {
-    Print(L"%r on Locate EFI Simple File System Protocol.\n", Status);
-    return Status;
+  // load loader2
+  EFI_PHYSICAL_ADDRESS loader2_buf;
+  UINT64 loader2_buf_size = 0;
+  LoadFileToMemoryPool(L"boot2.bin", &loader2_buf, &loader2_buf_size);
+
+  Print(L"Cmdline addr = 0x%lx\n", Cmdline);
+  Print(L"Kernel addr = 0x%lx\n", Kernel);
+  Print(L"boot2 addr = 0x%lx\n", loader2_buf);
+
+  int wait = 1;
+  while (wait) {
+      __asm__ __volatile__("pause");
   }
 
-  Status = SimpleFile->OpenVolume(SimpleFile, &Root);
-  if (EFI_ERROR (Status)) {
-    Print(L"%r on Open volume.\n", Status);
-    return Status;
-  }
-
-  Status = Root->Open(Root, &File, Path, EFI_FILE_MODE_READ, EFI_FILE_READ_ONLY);
-  if (EFI_ERROR (Status)) {
-    Print(L"%r on Open file.\n", Status);
-    return Status;
-  }
-
-  // get file info
-  EFI_FILE_INFO *FileInfo;
-  UINTN FileInfoSize = sizeof(EFI_FILE_INFO) * 2;
-  Status = gBS->AllocatePool(
-			     EfiLoaderData,
-			     FileInfoSize,
-			     (VOID **)&FileInfo
-			     );
-  if (EFI_ERROR (Status)) {
-    Print(L"%Could not allocate memory pool %r\n", Status);
-    return Status;
-  }
-
-  Status = File->GetInfo(File, &gEfiFileInfoGuid, &FileInfoSize, FileInfo);
-  if (EFI_ERROR (Status)) {
-    Print(L"%Could not get FileInfo: %r\n", Status);
-    return Status;
-  }
-
-  // get file size
-  UINT64 BufferSize = FileInfo->FileSize;
-  Print(L"FileSize = %d\n", BufferSize);
-  
-  // allocate FileBuffer
-  VOID *Buffer;
-  Status = gBS->AllocatePool(
-			     EfiLoaderData,
-			     BufferSize,
-			     (VOID **)&Buffer
-			     );
-  if (EFI_ERROR (Status)) {
-    Print(L"%Could not allocate memory pool %r\n", Status);
-    return Status;
-  }
-
-  Status = File->Read(
-		      File,
-		      &BufferSize,
-		      (VOID *)Buffer
-		      );
-  if (EFI_ERROR (Status)) {
-    Print(L"%r on Open file.\n", Status);
-    return Status;
-  }
-
-  File->Close(File);
-  Root->Close(Root);
-
+  // start kernel
+  entry_func_t *entry_func;
+  entry_func = (entry_func_t *)((UINT64 *)loader2_buf + 1);
+  entry_func ((VOID *)Kernel, (VOID *)e820data_entry, (VOID *)Cmdline);
+  // EFIAPI (*loader2)(VOID *, VOID *, VOID *);
+  // loader2 = (EFIAPI (*))((UINT64 *)loader2_buf + 1);
+  // (*loader2)(Kernel, e820data_entry, Cmdline);
 
   gBS->FreePool(Memmap);
-  gBS->FreePool(e820data);
-  gBS->FreePages(mb_info_mem, mb_info_mem_size);
-  gBS->FreePool(Buffer);
+  gBS->FreePool(e820data_entry);
+  gBS->FreePages(Cmdline, Cmdline_size);
+  gBS->FreePages(Kernel, Kernel_size);
+  gBS->FreePages(loader2_buf, loader2_buf_size);
     
   return EFI_SUCCESS;
 }
