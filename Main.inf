@@ -26,6 +26,7 @@
 
 [Sources]
   Main.c
+  set_reg.S
 
 [Packages]
   StdLib/StdLib.dec

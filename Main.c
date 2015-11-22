@@ -19,7 +19,6 @@
 
 #include  <stdio.h>
 #include  <stdint.h>
-
 //#include "elfparse.h"
 
 
@@ -73,6 +72,16 @@ struct multiboot_info_type {
 
 typedef int EFIAPI entry_func_t(VOID *, VOID *, VOID *, VOID *);
 EFI_STATUS EFIAPI loader2(  IN VOID *Kernel,  IN VOID *E820,  IN VOID *CMDLINE,  IN VOID *MBINFO);
+
+
+extern EFI_STATUS EFIAPI boot_osv();
+
+void my_memcpy(uint8_t *dst, uint8_t *src, size_t size){
+  for(int i=0;i<size;i++){
+    dst[i] = src[i];
+  }
+  return;
+}
 
 void Memmap_to_e820(struct e820ent *e, EFI_MEMORY_DESCRIPTOR *md)
 {
@@ -171,7 +180,7 @@ LoadFileToMemoryPool(
   Status = gBS->AllocatePages(
            AllocateAnyPages,
            EfiLoaderData,
-           (*BufferSize + 8 + 4096) / 4096, // add 64bit space
+           (*BufferSize + 4096) / 4096, // add 64bit space
            Buffer
            );
   if (EFI_ERROR (Status)) {
@@ -187,7 +196,7 @@ LoadFileToMemoryPool(
   Status = File->Read(
           File,
           BufferSize,
-          (VOID *)(Buffer_p + 1) // shift 64bit
+          (VOID *)(Buffer_p) // shift 64bit
           );
   if (EFI_ERROR (Status)) {
     Print(L"%Could not Read file: %r\n", Status);
@@ -200,6 +209,7 @@ LoadFileToMemoryPool(
 
   return Buffer;
 }
+
 
 
 EFI_STATUS
@@ -218,131 +228,122 @@ UefiMain (
   Status = gBS->HandleProtocol( ImageHandle,
                                 &gEfiLoadedImageProtocolGuid,
                                 (void **)&loaded_image);
-    if (EFI_ERROR(Status)) {
-        Print(L"handleprotocol: %r\n", Status);
-    }
- 
-    Print(L"Image base: 0x%lx\n", loaded_image->ImageBase);
- 
-
-  UINTN MemmapSize = PAGE_SIZE;
-  VOID *Memmap;
-  
-  UINTN MapKey;
-  UINTN DescriptorSize;
-  UINT32 DescriptorVersion;
-
-  
-  Status = gBS->AllocatePool(
-			     EfiLoaderData,
-			     MemmapSize,
-			     (VOID **)&Memmap
-			     );
-  if (EFI_ERROR (Status)) {
-    Print(L"%Could not allocate memory pool %r\n", Status);
-    return Status;
-  }
-  
-  Status = gBS->GetMemoryMap(
-			     &MemmapSize,
-			     Memmap,
-			     &MapKey,
-			     &DescriptorSize,
-			     &DescriptorVersion
-			     );
-  if (EFI_ERROR (Status)) {
-    Print(L"%Could not get memory map %r\n", Status);
-    return Status;
+  if (EFI_ERROR(Status)) {
+    Print(L"handleprotocol: %r\n", Status);
   }
 
-  /* Print(L"Memmap = %p\n", Memmap); */
-  /* Print(L"MemmapSize = %d\n", MemmapSize); */
-  /* Print(L"MapKey = %d\n", MapKey); */
-  /* Print(L"sizeof(EFI_MEMORY_DESCRIPTOR) = %d\n", sizeof(EFI_MEMORY_DESCRIPTOR)); */
-  /* Print(L"DescriptorSize = %d\n", DescriptorSize); */
-  /* Print(L"DescriptorVersion = %d\n", DescriptorVersion); */
-
-  
-  UINT64 *e820data_entry;
-  UINT32 e820_size = sizeof(struct e820ent) * (MemmapSize / DescriptorSize);
-  Status = gBS->AllocatePool(
-			     EfiLoaderData,
-			     e820_size + 8, // add 64bit
-			     (VOID **)&e820data_entry
-			     );
-  if (EFI_ERROR (Status)) {
-    Print(L"%Could not allocate memory pool %r\n", Status);
-    return Status;
-  }
-
-  // set e820 size to first 64bit
-  *e820data_entry = e820_size;
-  // shift 64bit
-  struct e820ent *e820data = (struct e820ent *)(e820data_entry + 1);
-
-  for (int i = 0; i < (MemmapSize / DescriptorSize); i++)
-  {
-    EFI_MEMORY_DESCRIPTOR *md = Memmap + (i * DescriptorSize);
-    /* Print(L"memmap: 0x%08x, 0x%016x, 0x%016x, %10ld, 0x%016x\n", */
-    /* 	  md->Type, */
-    /* 	  md->PhysicalStart, */
-    /* 	  md->VirtualStart, */
-    /* 	  md->NumberOfPages, */
-    /* 	  md->Attribute */
-    /* 	  ); */
-    Memmap_to_e820(&(e820data[i]), md);
-    // Print(L"E820: %d, 0x%016x-0x%016x\n",
-    // 	  e820data[i].type,
-    // 	  e820data[i].addr,
-    // 	  e820data[i].addr + e820data[i].size
-    // 	  );   
-  }  
-
-  // load cmdline
-  EFI_PHYSICAL_ADDRESS Cmdline;
-  UINT64 Cmdline_size = 0;
-  LoadFileToMemoryPool(L"cmdline", &Cmdline, &Cmdline_size);
-
-  // load kernel
-  EFI_PHYSICAL_ADDRESS Kernel;
-  UINT64 Kernel_size = 0;
-  LoadFileToMemoryPool(L"loader-stripped.elf", &Kernel, &Kernel_size);
-
-  // load loader2
-  EFI_PHYSICAL_ADDRESS loader2_buf;
-  UINT64 loader2_buf_size = 0;
-  LoadFileToMemoryPool(L"boot2.bin", &loader2_buf, &loader2_buf_size);
-
-  struct multiboot_info_type mb_info = {0};
-
-  mb_info.cmdline = ADDR_CMDLINE;
-  mb_info.mmap_length = (uint32_t)*e820data_entry;
-  mb_info.mmap_addr = ADDR_E820DATA;
-
-  Print(L"Cmdline addr = 0x%lx\n", Cmdline);
-  Print(L"Kernel addr = 0x%lx\n", Kernel);
-  Print(L"boot2 addr = 0x%lx\n", loader2_buf);
-  Print(L"e820data_entry addr = 0x%lx\n", e820data_entry);
-  Print(L"mb_info addr = 0x%lx\n", &mb_info);
+  Print(L"Image base: 0x%lx\n", loaded_image->ImageBase);
 
   // int wait = 1;
   // while (wait) {
   //     __asm__ __volatile__("pause");
   // }
 
-  // start kernel
-  entry_func_t *entry_func;
-  entry_func = (entry_func_t *)((UINT64 *)loader2_buf + 1);
-  entry_func ((VOID *)Kernel, (VOID *)e820data_entry, (VOID *)Cmdline, (VOID *)&mb_info);
-  // EFIAPI (*loader2)(VOID *, VOID *, VOID *);
-  // loader2 = (EFIAPI (*))((UADDR_CMDLINEINT64 *)loader2_buf + 1);
-  // (*loader2)(Kernel, e820data_entry, Cmdline);
 
-  gBS->FreePool(Memmap);
-  gBS->FreePool(e820data_entry);
-  gBS->FreePages(Cmdline, Cmdline_size);
-  gBS->FreePages(Kernel, Kernel_size);
-  gBS->FreePages(loader2_buf, loader2_buf_size);
+
+  // load cmdline
+  EFI_PHYSICAL_ADDRESS Cmdline;
+  UINT64 Cmdline_size = 0;
+  LoadFileToMemoryPool(L"cmdline", &Cmdline, &Cmdline_size);
+  // load kernel
+  EFI_PHYSICAL_ADDRESS Kernel;
+  UINT64 Kernel_size = 0;
+  LoadFileToMemoryPool(L"loader-stripped.elf", &Kernel, &Kernel_size);
+
+  // convert UEFI_MEMMAP to e820data
+  UINTN MemmapSize = PAGE_SIZE;
+  VOID *Memmap;
+  UINTN MapKey;
+  UINTN DescriptorSize;
+  UINT32 DescriptorVersion;
+
+  
+  Status = gBS->AllocatePool(
+           EfiLoaderData,
+           MemmapSize,
+           (VOID **)&Memmap
+           );
+  if (EFI_ERROR (Status)) {
+    Print(L"%Could not allocate memory pool %r\n", Status);
+    return Status;
+  }
+  
+  Status = gBS->GetMemoryMap(
+           &MemmapSize,
+           Memmap,
+           &MapKey,
+           &DescriptorSize,
+           &DescriptorVersion
+           );
+  if (EFI_ERROR (Status)) {
+    Print(L"%Could not get memory map %r\n", Status);
+    return Status;
+  }
+  /* Print(L"Memmap = %p\n", Memmap); */
+  /* Print(L"MemmapSize = %d\n", MemmapSize); */
+  /* Print(L"MapKey = %d\n", MapKey); */
+  /* Print(L"sizeof(EFI_MEMORY_DESCRIPTOR) = %d\n", sizeof(EFI_MEMORY_DESCRIPTOR)); */
+  /* Print(L"DescriptorSize = %d\n", DescriptorSize); */
+  /* Print(L"DescriptorVersion = %d\n", DescriptorVersion); */
+  struct e820ent *e820data;
+  UINT32 e820_size = sizeof(struct e820ent) * (MemmapSize / DescriptorSize);
+  Status = gBS->AllocatePool(
+           EfiLoaderData,
+           e820_size, // add 64bit
+           (VOID **)&e820data
+           );
+  if (EFI_ERROR (Status)) {
+    Print(L"%Could not allocate memory pool %r\n", Status);
+    return Status;
+  }
+  for (int i = 0; i < (MemmapSize / DescriptorSize); i++)
+  {
+    EFI_MEMORY_DESCRIPTOR *md = Memmap + (i * DescriptorSize);
+    /* Print(L"memmap: 0x%08x, 0x%016x, 0x%016x, %10ld, 0x%016x\n", */
+    /*    md->Type, */
+    /*    md->PhysicalStart, */
+    /*    md->VirtualStart, */
+    /*    md->NumberOfPages, */
+    /*    md->Attribute */
+    /*    ); */
+    Memmap_to_e820(&(e820data[i]), md);
+    // Print(L"E820: %d, 0x%016x-0x%016x\n",
+    //    e820data[i].type,
+    //    e820data[i].addr,
+    //    e820data[i].addr + e820data[i].size
+    //    );   
+  }  
+
+
+  // ExitBootService
+  // Status = gBS->GetMemoryMap(
+  //          &MemmapSize,
+  //          Memmap,
+  //          &MapKey,
+  //          &DescriptorSize,
+  //          &DescriptorVersion
+  //          );
+  // if (EFI_ERROR (Status)) {
+  //   Print(L"%Could not get memory map %r\n", Status);
+  //   return Status;
+  // }
+  
+  gBS->ExitBootServices(ImageHandle, MapKey);
+
+  // make multiboot_info
+  struct multiboot_info_type mb_info = {0};
+  mb_info.cmdline = ADDR_CMDLINE;
+  mb_info.mmap_length = (uint32_t)e820_size;
+  mb_info.mmap_addr = ADDR_E820DATA;
+
+  // set cmdline, multiboot info, kernel to target address
+  // memcpy: dst, src, size
+  my_memcpy((void *)ADDR_MB_INFO, (void *)&mb_info, sizeof(struct multiboot_info_type));
+  my_memcpy((void *)ADDR_E820DATA, (void *)e820data, (size_t)e820_size);
+  my_memcpy((void *)ADDR_TARGET, (void *)Kernel, (size_t)Kernel_size);
+  
+  // call boot_osv
+  boot_osv();
     
   return EFI_SUCCESS;
 }
