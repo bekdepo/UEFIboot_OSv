@@ -71,7 +71,8 @@ struct multiboot_info_type {
   uint16_t vbe_interface_len;
 } __attribute__((packed));
 
-typedef int EFIAPI entry_func_t(VOID *, VOID *, VOID *);
+typedef int EFIAPI entry_func_t(VOID *, VOID *, VOID *, VOID *);
+EFI_STATUS EFIAPI loader2(  IN VOID *Kernel,  IN VOID *E820,  IN VOID *CMDLINE,  IN VOID *MBINFO);
 
 void Memmap_to_e820(struct e820ent *e, EFI_MEMORY_DESCRIPTOR *md)
 {
@@ -106,9 +107,6 @@ memory_verify(uint8_t *src, uint8_t *dest, int size){
   }
   return 0;
 }
-
-EFI_STATUS EFIAPI loader2(  IN VOID *Kernel,  IN VOID *E820,  IN VOID *CMDLINE  );
-
 
 VOID *
 EFIAPI
@@ -315,21 +313,29 @@ UefiMain (
   UINT64 loader2_buf_size = 0;
   LoadFileToMemoryPool(L"boot2.bin", &loader2_buf, &loader2_buf_size);
 
+  struct multiboot_info_type mb_info = {0};
+
+  mb_info.cmdline = ADDR_CMDLINE;
+  mb_info.mmap_length = (uint32_t)*e820data_entry;
+  mb_info.mmap_addr = ADDR_E820DATA;
+
   Print(L"Cmdline addr = 0x%lx\n", Cmdline);
   Print(L"Kernel addr = 0x%lx\n", Kernel);
   Print(L"boot2 addr = 0x%lx\n", loader2_buf);
+  Print(L"e820data_entry addr = 0x%lx\n", e820data_entry);
+  Print(L"mb_info addr = 0x%lx\n", &mb_info);
 
-  int wait = 1;
-  while (wait) {
-      __asm__ __volatile__("pause");
-  }
+  // int wait = 1;
+  // while (wait) {
+  //     __asm__ __volatile__("pause");
+  // }
 
   // start kernel
   entry_func_t *entry_func;
   entry_func = (entry_func_t *)((UINT64 *)loader2_buf + 1);
-  entry_func ((VOID *)Kernel, (VOID *)e820data_entry, (VOID *)Cmdline);
+  entry_func ((VOID *)Kernel, (VOID *)e820data_entry, (VOID *)Cmdline, (VOID *)&mb_info);
   // EFIAPI (*loader2)(VOID *, VOID *, VOID *);
-  // loader2 = (EFIAPI (*))((UINT64 *)loader2_buf + 1);
+  // loader2 = (EFIAPI (*))((UADDR_CMDLINEINT64 *)loader2_buf + 1);
   // (*loader2)(Kernel, e820data_entry, Cmdline);
 
   gBS->FreePool(Memmap);
