@@ -21,6 +21,8 @@
 #include  <stdint.h>
 //#include "elfparse.h"
 
+#define DEBUG
+
 
 EFI_SYSTEM_TABLE  *gST;
 EFI_BOOT_SERVICES *gBS;
@@ -32,8 +34,6 @@ EFI_BOOT_SERVICES *gBS;
 #define ADDR_MB_INFO 0x1000
 #define ADDR_E820DATA 0x1100
 #define ADDR_STACK 0x1200
-
-#define ENTRY_ADDR 0x000000000021022e
 
 #define E820_USABLE 1
 #define E820_RESERVED 2
@@ -88,6 +88,7 @@ void Memmap_to_e820(struct e820ent *e, EFI_MEMORY_DESCRIPTOR *md)
   e->ent_size = 20;
   e->addr = md->PhysicalStart;
   e->size = md->NumberOfPages * PAGE_SIZE; // PAGE_SIZE = 4096(4KiB)
+
   switch (md->Type) {
   case EfiLoaderCode:
   case EfiLoaderData:
@@ -105,6 +106,11 @@ void Memmap_to_e820(struct e820ent *e, EFI_MEMORY_DESCRIPTOR *md)
     e->type = E820_RESERVED;
     break;
   }
+
+#ifdef DEBUG
+  Print(L"md->PhysicalStart: %llx\n", md->PhysicalStart);
+  Print(L"md->NumberOfPages * 4096: %x\n", md->NumberOfPages * 4096);
+#endif
 }
 
 int
@@ -296,9 +302,11 @@ UefiMain (
     Print(L"%Could not allocate memory pool %r\n", Status);
     return Status;
   }
+  int e820_entry_count = 0;
   for (int i = 0; i < (MemmapSize / DescriptorSize); i++)
   {
     EFI_MEMORY_DESCRIPTOR *md = Memmap + (i * DescriptorSize);
+    struct e820ent e;
     /* Print(L"memmap: 0x%08x, 0x%016x, 0x%016x, %10ld, 0x%016x\n", */
     /*    md->Type, */
     /*    md->PhysicalStart, */
@@ -306,13 +314,38 @@ UefiMain (
     /*    md->NumberOfPages, */
     /*    md->Attribute */
     /*    ); */
-    Memmap_to_e820(&(e820data[i]), md);
-    // Print(L"E820: %d, 0x%016x-0x%016x\n",
-    //    e820data[i].type,
-    //    e820data[i].addr,
-    //    e820data[i].addr + e820data[i].size
-    //    );   
-  }  
+    Memmap_to_e820(&e, md);
+
+    if(e820_entry_count == 0) {
+      e820data[e820_entry_count] = e;
+      e820_entry_count++;
+      continue;
+    }
+
+    // merge
+    struct e820ent *e_b = &(e820data[e820_entry_count]);
+    uint64_t e_b_endaddr = e_b->addr + e_b->size;
+    if( (e_b_endaddr == e.addr) && (e_b->type == e.type) ){
+      e_b->size += e.size;
+      continue;
+    }
+
+    e820data[e820_entry_count] = e;
+    e820_entry_count++;
+  }
+
+#ifdef DEBUG
+  for(int i = 0; i < e820_entry_count; i++){
+    Print(L"E820: %d, 0x%016x-0x%016x\n",
+       e820data[i].type,
+       e820data[i].addr,
+       e820data[i].addr + e820data[i].size
+       );
+  }
+#endif
+
+  // reset e820_data
+  e820_size = sizeof(struct e820ent) * e820_entry_count;
 
 
   // ExitBootService
