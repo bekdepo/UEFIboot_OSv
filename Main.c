@@ -318,8 +318,14 @@ UefiMain (
     }
 
     // merge
-    struct e820ent *e_b = &(e820data[e820_entry_count]);
+    struct e820ent *e_b = &(e820data[e820_entry_count - 1]);
     uint64_t e_b_endaddr = e_b->addr + e_b->size;
+#ifdef DEBUG
+    Print(L"befend:next 0x%016x:%d, 0x%016x:%d\n",
+     e_b_endaddr, e_b->type,
+     e.addr, e.type
+     );
+#endif
     if( (e_b_endaddr == e.addr) && (e_b->type == e.type) ){
       e_b->size += e.size;
       continue;
