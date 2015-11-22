@@ -95,12 +95,7 @@ void Memmap_to_e820(struct e820ent *e, EFI_MEMORY_DESCRIPTOR *md)
   case EfiBootServicesCode:
   case EfiBootServicesData:
   case EfiConventionalMemory:
-    if (md->Attribute & EFI_MEMORY_WB) {
-      e->type = E820_USABLE;
-    }
-    else {
-      e->type = E820_RESERVED;
-    }
+    e->type = E820_USABLE;
     break;
   default:
     e->type = E820_RESERVED;
