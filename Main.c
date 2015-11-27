@@ -16,6 +16,8 @@
 #include <Protocol/SimpleFileSystem.h>
 #include <Guid/FileInfo.h>
 #include <Protocol/LoadedImage.h>
+#include <Guid/Acpi.h>
+#include <Library/BaseMemoryLib.h>
 
 #include  <stdio.h>
 #include  <stdint.h>
@@ -29,6 +31,7 @@ EFI_BOOT_SERVICES *gBS;
 
 #define PAGE_SIZE 4096
 
+#include "addr_entry.h"
 #define ADDR_CMDLINE 0x7e00
 #define ADDR_TARGET 0x200000
 #define ADDR_MB_INFO 0x1000
@@ -70,11 +73,7 @@ struct multiboot_info_type {
   uint16_t vbe_interface_len;
 } __attribute__((packed));
 
-typedef int EFIAPI entry_func_t(VOID *, VOID *, VOID *, VOID *);
-EFI_STATUS EFIAPI loader2(  IN VOID *Kernel,  IN VOID *E820,  IN VOID *CMDLINE,  IN VOID *MBINFO);
-
-
-extern EFI_STATUS EFIAPI boot_osv();
+extern EFI_STATUS EFIAPI boot_osv(void *entry, void *mb_info, void *target, void *rsdp);
 
 void my_memcpy(uint8_t *dst, uint8_t *src, size_t size){
   for(int i=0;i<size;i++){
@@ -318,14 +317,8 @@ UefiMain (
     }
 
     // merge
-    struct e820ent *e_b = &(e820data[e820_entry_count - 1]);
+    struct e820ent *e_b = &(e820data[e820_entry_count]);
     uint64_t e_b_endaddr = e_b->addr + e_b->size;
-#ifdef DEBUG
-    Print(L"befend:next 0x%016x:%d, 0x%016x:%d\n",
-     e_b_endaddr, e_b->type,
-     e.addr, e.type
-     );
-#endif
     if( (e_b_endaddr == e.addr) && (e_b->type == e.type) ){
       e_b->size += e.size;
       continue;
@@ -348,6 +341,17 @@ UefiMain (
   // reset e820_data
   e820_size = sizeof(struct e820ent) * e820_entry_count;
 
+  EFI_CONFIGURATION_TABLE * pTable;
+  UINTN                   Index;
+  VOID			  * rsdp = NULL;
+  pTable = gST->ConfigurationTable;
+  for (Index = 0; Index < gST->NumberOfTableEntries; Index++) {
+    if (CompareGuid (&pTable[Index].VendorGuid, &gEfiAcpi20TableGuid)) {
+        rsdp = (VOID *)(UINTN)pTable[Index].VendorTable;
+	break;
+    }
+  }
+  Print(L"rsdp:%p\n", rsdp);
 
   // ExitBootService
   // Status = gBS->GetMemoryMap(
@@ -377,7 +381,7 @@ UefiMain (
   my_memcpy((void *)ADDR_TARGET, (void *)Kernel, (size_t)Kernel_size);
   
   // call boot_osv
-  boot_osv();
+  boot_osv((void *)ADDR_ENTRY, (void *)ADDR_MB_INFO, (void *)ADDR_TARGET, rsdp);
     
   return EFI_SUCCESS;
 }

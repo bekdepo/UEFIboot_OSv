@@ -26,7 +26,7 @@
 
 [Sources]
   Main.c
-  set_reg.S
+  boot_osv.S
 
 [Packages]
   StdLib/StdLib.dec
@@ -36,6 +36,9 @@
 [LibraryClasses]
   LibC
   LibStdio
+
+[Guids]
+  gEfiAcpi20TableGuid
 
 [Protocols]
   gEfiLoadedImageProtocolGuid
