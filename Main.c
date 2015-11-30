@@ -232,12 +232,12 @@ UefiMain (
     Print(L"handleprotocol: %r\n", Status);
   }
 
-  Print(L"Image base: 0x%lx\n", loaded_image->ImageBase);
-
-  // int wait = 1;
-  // while (wait) {
-  //     __asm__ __volatile__("pause");
-  // }
+  
+  /* Print(L"Image base: 0x%lx\n", loaded_image->ImageBase); */
+  /* int wait = 1; */
+  /* while (wait) { */
+  /*     __asm__ __volatile__("pause"); */
+  /* } */
 
 
 
@@ -296,8 +296,12 @@ UefiMain (
     Print(L"%Could not allocate memory pool %r\n", Status);
     return Status;
   }
+  
   int e820_entry_count = 0;
-  for (int i = 0; i < (MemmapSize / DescriptorSize); i++)
+  EFI_MEMORY_DESCRIPTOR *md_first = Memmap;
+  Memmap_to_e820(&(e820data[0]), md_first);
+
+  for (int i = 1; i < (MemmapSize / DescriptorSize); i++)
   {
     EFI_MEMORY_DESCRIPTOR *md = Memmap + (i * DescriptorSize);
     struct e820ent e;
@@ -310,12 +314,6 @@ UefiMain (
     /*    ); */
     Memmap_to_e820(&e, md);
 
-    if(e820_entry_count == 0) {
-      e820data[e820_entry_count] = e;
-      e820_entry_count++;
-      continue;
-    }
-
     // merge
     struct e820ent *e_b = &(e820data[e820_entry_count]);
     uint64_t e_b_endaddr = e_b->addr + e_b->size;
@@ -324,8 +322,8 @@ UefiMain (
       continue;
     }
 
-    e820data[e820_entry_count] = e;
     e820_entry_count++;
+    e820data[e820_entry_count] = e;
   }
 
 #ifdef DEBUG
