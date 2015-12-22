@@ -21,17 +21,16 @@
 
 #include  <stdio.h>
 #include  <stdint.h>
-//#include "elfparse.h"
+#include <string.h>
+#include "elf64.h"
 
-#define DEBUG
+// #define DEBUG
 
 
 EFI_SYSTEM_TABLE  *gST;
 EFI_BOOT_SERVICES *gBS;
 
 #define PAGE_SIZE 4096
-
-#include "addr_entry.h"
 #define ADDR_CMDLINE 0x7e00
 #define ADDR_TARGET 0x200000
 #define ADDR_MB_INFO 0x1000
@@ -111,6 +110,7 @@ int
 memory_verify(uint8_t *src, uint8_t *dest, int size){
   for (int i = 0; i < size; i++) {
     if (src[i] != dest[i]) {
+      Print(L"Memory verify error!\n");
       return -1;
     }
   }
@@ -210,7 +210,56 @@ LoadFileToMemoryPool(
   return Buffer;
 }
 
+UINT64 getELFsymaddr(void *buf, char *symname){
+  // get ELF_header e_shoff
+  Elf64_Ehdr *header = (Elf64_Ehdr *)buf;
+  UINT64 address = 0;
 
+  // get Section_header
+  Elf64_Shdr *shdr_start = (Elf64_Shdr *)(buf + header->e_shoff);
+  Elf64_Shdr *shdr_shstrtab = shdr_start + header->e_shstrndx;
+  char *shstrtab = buf + shdr_shstrtab->sh_offset;
+  Elf64_Shdr *shdr_symtab = NULL;
+  Elf64_Shdr *shdr_strtab = NULL;
+
+
+  printf("strtb_sec name = %s\n", shstrtab + shdr_shstrtab->sh_name);
+
+  // if *sh_name == ".symtab" then sh_offset
+  for(int i=0;i<header->e_shnum;i++){
+    Elf64_Shdr *shdr = shdr_start + i;
+    char *shname = shstrtab + shdr->sh_name;
+    //    printf("%s\n", shname);
+    if(strncmp(shname, ".symtab", 100) == 0){
+      //printf("section = %s\n", shname);
+      shdr_symtab = shdr;
+    }
+    if(strncmp(shname, ".strtab", 100) == 0){
+      //printf("section = %s\n", shname);
+      shdr_strtab = shdr;
+    }
+  }
+  if(shdr_symtab == NULL || shdr_strtab == NULL){
+    // not found
+    return -1;
+  }
+
+  char *strtab = buf + shdr_strtab->sh_offset;
+
+  // get symbol_table
+  // if *st_name == "hoge" then st_value
+  Elf64_Sym *symtb_start = (Elf64_Sym *)(buf + shdr_symtab->sh_offset);
+  for(int i=0;i<(shdr_symtab->sh_size/sizeof(Elf64_Sym));i++){
+    Elf64_Sym *symtb = symtb_start + i;
+    char *symname = strtab + symtb->st_name;
+    //printf("%s = %x\n", symname, symtb->st_value);
+    if (strncmp(strtab+symtb->st_name, symname, 100) == 0){
+      address = (UINT64)symtb->st_value;
+    }
+  }
+
+  return address;
+}
 
 EFI_STATUS
 EFIAPI
@@ -248,7 +297,12 @@ UefiMain (
   // load kernel
   EFI_PHYSICAL_ADDRESS Kernel;
   UINT64 Kernel_size = 0;
-  LoadFileToMemoryPool(L"loader-stripped.elf", &Kernel, &Kernel_size);
+  LoadFileToMemoryPool(L"loader.elf", &Kernel, &Kernel_size);
+
+  // get start64(64-bit entory point) address
+  UINT64 address = getELFsymaddr((void *)Kernel, "start64");
+  Print(L"start64 = %p\n", address);
+
 
   // convert UEFI_MEMMAP to e820data
   UINTN MemmapSize = PAGE_SIZE;
