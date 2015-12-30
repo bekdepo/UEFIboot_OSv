@@ -210,7 +210,7 @@ LoadFileToMemoryPool(
   return Buffer;
 }
 
-UINT64 getELFsymaddr(void *buf, char *symname){
+UINT64 getELFsymaddr(void *buf, char *search_symname){
   // get ELF_header e_shoff
   Elf64_Ehdr *header = (Elf64_Ehdr *)buf;
   UINT64 address = 0;
@@ -222,20 +222,17 @@ UINT64 getELFsymaddr(void *buf, char *symname){
   Elf64_Shdr *shdr_symtab = NULL;
   Elf64_Shdr *shdr_strtab = NULL;
 
-
-  printf("strtb_sec name = %s\n", shstrtab + shdr_shstrtab->sh_name);
-
   // if *sh_name == ".symtab" then sh_offset
   for(int i=0;i<header->e_shnum;i++){
     Elf64_Shdr *shdr = shdr_start + i;
     char *shname = shstrtab + shdr->sh_name;
-    //    printf("%s\n", shname);
-    if(strncmp(shname, ".symtab", 100) == 0){
-      //printf("section = %s\n", shname);
+    // Print(L"%s\n", shname);
+    if(strcmp(shname, ".symtab") == 0){
+      // Print(L"offset = %s\n", shname);
       shdr_symtab = shdr;
     }
-    if(strncmp(shname, ".strtab", 100) == 0){
-      //printf("section = %s\n", shname);
+    if(strcmp(shname, ".strtab") == 0){
+      // Print("strtab = %s\n", shname);
       shdr_strtab = shdr;
     }
   }
@@ -252,8 +249,8 @@ UINT64 getELFsymaddr(void *buf, char *symname){
   for(int i=0;i<(shdr_symtab->sh_size/sizeof(Elf64_Sym));i++){
     Elf64_Sym *symtb = symtb_start + i;
     char *symname = strtab + symtb->st_name;
-    //printf("%s = %x\n", symname, symtb->st_value);
-    if (strncmp(strtab+symtb->st_name, symname, 100) == 0){
+    if (strcmp(symname, search_symname) == 0){
+      // Print(L"%s = %x\n", symname, symtb->st_value);
       address = (UINT64)symtb->st_value;
     }
   }
@@ -433,7 +430,7 @@ UefiMain (
   my_memcpy((void *)ADDR_TARGET, (void *)Kernel, (size_t)Kernel_size);
   
   // call boot_osv
-  boot_osv((void *)ADDR_ENTRY, (void *)ADDR_MB_INFO, (void *)ADDR_TARGET, rsdp);
+  boot_osv((void *)address, (void *)ADDR_MB_INFO, (void *)ADDR_TARGET, rsdp);
     
   return EFI_SUCCESS;
 }
