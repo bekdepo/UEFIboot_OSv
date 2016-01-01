@@ -350,7 +350,8 @@ UefiMain (
   
   int e820_entry_count = 0;
   EFI_MEMORY_DESCRIPTOR *md_first = Memmap;
-  Memmap_to_e820(&(e820data[0]), md_first);
+  Memmap_to_e820(&(e820data[e820_entry_count]), md_first);
+  e820_entry_count++;
 
   for (int i = 1; i < (MemmapSize / DescriptorSize); i++)
   {
@@ -366,15 +367,15 @@ UefiMain (
     Memmap_to_e820(&e, md);
 
     // merge
-    struct e820ent *e_b = &(e820data[e820_entry_count]);
+    struct e820ent *e_b = &(e820data[e820_entry_count - 1]);
     uint64_t e_b_endaddr = e_b->addr + e_b->size;
     if( (e_b_endaddr == e.addr) && (e_b->type == e.type) ){
       e_b->size += e.size;
       continue;
     }
 
-    e820_entry_count++;
     e820data[e820_entry_count] = e;
+    e820_entry_count++;
   }
 
 #ifdef DEBUG
