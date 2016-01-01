@@ -377,6 +377,12 @@ UefiMain (
     e820data[e820_entry_count] = e;
     e820_entry_count++;
   }
+  // insert zero fill entry
+  e820data[e820_entry_count].ent_size = 20;
+  e820data[e820_entry_count].size = 0;
+  e820data[e820_entry_count].addr = 0;
+  e820data[e820_entry_count].type = 0;
+  e820_entry_count++;
 
 #ifdef DEBUG
   for(int i = 0; i < e820_entry_count; i++){
